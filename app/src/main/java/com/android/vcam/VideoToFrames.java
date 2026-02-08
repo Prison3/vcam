@@ -15,8 +15,6 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.concurrent.LinkedBlockingQueue;
 
-import de.robv.android.xposed.XposedBridge;
-
 /**
  * 视频解码为帧，供虚拟摄像头使用。
  * 代码修改自 https://github.com/zhantong/Android-VideoToImages
@@ -97,7 +95,7 @@ public class VideoToFrames implements Runnable {
 
     @SuppressLint("WrongConstant")
     public void videoDecode(String path) throws IOException {
-        XposedBridge.log("【VCAM】【decoder】开始解码");
+        Logger.i("【VCAM】【decoder】开始解码");
         MediaExtractor extractor = null;
         MediaCodec decoder = null;
         try {
@@ -105,7 +103,7 @@ public class VideoToFrames implements Runnable {
             extractor.setDataSource(path);
             int trackIndex = selectTrack(extractor);
             if (trackIndex < 0) {
-                XposedBridge.log("【VCAM】【decoder】No video track found in " + path);
+                Logger.i("【VCAM】【decoder】No video track found in " + path);
                 return;
             }
             extractor.selectTrack(trackIndex);
@@ -118,10 +116,10 @@ public class VideoToFrames implements Runnable {
             }
             if (isColorFormatSupported(decodeColorFormat, caps)) {
                 mediaFormat.setInteger(MediaFormat.KEY_COLOR_FORMAT, decodeColorFormat);
-                XposedBridge.log("【VCAM】【decoder】set decode color format to type " + decodeColorFormat);
+                Logger.i("【VCAM】【decoder】set decode color format to type " + decodeColorFormat);
             } else {
                 Log.i(TAG, "unable to set decode color format, type " + decodeColorFormat + " not supported");
-                XposedBridge.log("【VCAM】【decoder】unable to set decode color format, type " + decodeColorFormat + " not supported");
+                Logger.i("【VCAM】【decoder】unable to set decode color format, type " + decodeColorFormat + " not supported");
             }
             decodeFramesToImage(decoder, extractor, mediaFormat);
             decoder.stop();
@@ -131,7 +129,7 @@ public class VideoToFrames implements Runnable {
                 decoder.stop();
             }
         } catch (Exception e) {
-            XposedBridge.log("【VCAM】[videofile] " + e);
+            Logger.i("【VCAM】[videofile] " + e);
         } finally {
             if (decoder != null) {
                 try {
@@ -215,7 +213,7 @@ public class VideoToFrames implements Runnable {
                                         mQueue.put(arr);
                                     } catch (InterruptedException e) {
                                         Thread.currentThread().interrupt();
-                                        XposedBridge.log("【VCAM】" + e);
+                                        Logger.i("【VCAM】" + e);
                                     }
                                 }
                                 if (outputImageFormat != null) {
@@ -232,7 +230,7 @@ public class VideoToFrames implements Runnable {
                             Thread.sleep(sleepTime);
                         } catch (InterruptedException e) {
                             Thread.currentThread().interrupt();
-                            XposedBridge.log("【VCAM】线程延迟被中断");
+                            Logger.i("【VCAM】线程延迟被中断");
                         }
                     }
                     decoder.releaseOutputBuffer(outputBufferId, true);
