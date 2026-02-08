@@ -132,7 +132,7 @@ public class MainActivity extends Activity {
     }
 
     private void syncStateWithFiles() {
-        Log.d(getPackageName(), "【VCAM】[sync]同步开关状态");
+        Log.d(getPackageName(), "VCAM sync switch state");
 
         if (!hasPermission()) {
             requestPermission();

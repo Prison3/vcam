@@ -9,13 +9,11 @@ import android.util.Log;
 public final class Logger {
 
     private static final String TAG = "VCAM";
-    private static final String PREFIX = "【VCAM】";
 
     private Logger() {}
 
     private static String message(String msg) {
-        if (msg == null) return "";
-        return msg.startsWith(PREFIX) ? msg.substring(PREFIX.length()).trim() : msg;
+        return msg != null ? msg : "";
     }
 
     public static void d(String msg) {

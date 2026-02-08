@@ -95,7 +95,7 @@ public class VideoToFrames implements Runnable {
 
     @SuppressLint("WrongConstant")
     public void videoDecode(String path) throws IOException {
-        Logger.i("【VCAM】【decoder】开始解码");
+        Logger.i("decoder: start decoding");
         MediaExtractor extractor = null;
         MediaCodec decoder = null;
         try {
@@ -103,7 +103,7 @@ public class VideoToFrames implements Runnable {
             extractor.setDataSource(path);
             int trackIndex = selectTrack(extractor);
             if (trackIndex < 0) {
-                Logger.i("【VCAM】【decoder】No video track found in " + path);
+                Logger.i("decoder: no video track found in " + path);
                 return;
             }
             extractor.selectTrack(trackIndex);
@@ -116,10 +116,10 @@ public class VideoToFrames implements Runnable {
             }
             if (isColorFormatSupported(decodeColorFormat, caps)) {
                 mediaFormat.setInteger(MediaFormat.KEY_COLOR_FORMAT, decodeColorFormat);
-                Logger.i("【VCAM】【decoder】set decode color format to type " + decodeColorFormat);
+                Logger.i("decoder: set decode color format to type " + decodeColorFormat);
             } else {
                 Log.i(TAG, "unable to set decode color format, type " + decodeColorFormat + " not supported");
-                Logger.i("【VCAM】【decoder】unable to set decode color format, type " + decodeColorFormat + " not supported");
+                Logger.i("decoder: unable to set decode color format, type " + decodeColorFormat + " not supported");
             }
             decodeFramesToImage(decoder, extractor, mediaFormat);
             decoder.stop();
@@ -129,7 +129,7 @@ public class VideoToFrames implements Runnable {
                 decoder.stop();
             }
         } catch (Exception e) {
-            Logger.i("【VCAM】[videofile] " + e);
+            Logger.i("videofile error: " + e);
         } finally {
             if (decoder != null) {
                 try {
@@ -213,7 +213,7 @@ public class VideoToFrames implements Runnable {
                                         mQueue.put(arr);
                                     } catch (InterruptedException e) {
                                         Thread.currentThread().interrupt();
-                                        Logger.i("【VCAM】" + e);
+                                        Logger.i(String.valueOf(e));
                                     }
                                 }
                                 if (outputImageFormat != null) {
@@ -230,7 +230,7 @@ public class VideoToFrames implements Runnable {
                             Thread.sleep(sleepTime);
                         } catch (InterruptedException e) {
                             Thread.currentThread().interrupt();
-                            Logger.i("【VCAM】线程延迟被中断");
+                            Logger.i("decode thread sleep interrupted");
                         }
                     }
                     decoder.releaseOutputBuffer(outputBufferId, true);
