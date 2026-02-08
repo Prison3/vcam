@@ -1,4 +1,4 @@
-package com.example.vcam;
+package com.android.vcam;
 
 import org.junit.Test;
 
