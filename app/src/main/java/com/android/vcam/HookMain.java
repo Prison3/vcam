@@ -1,58 +1,45 @@
 package com.android.vcam;
 
-
 import android.Manifest;
 import android.app.Application;
 import android.content.Context;
 import android.content.pm.PackageManager;
-import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
-import android.graphics.SurfaceTexture;
-import android.hardware.Camera;
-import android.hardware.camera2.CameraCaptureSession;
-import android.hardware.camera2.CameraDevice;
-import android.hardware.camera2.CaptureFailure;
-import android.hardware.camera2.CaptureRequest;
-import android.hardware.camera2.params.InputConfiguration;
-import android.hardware.camera2.params.OutputConfiguration;
-import android.hardware.camera2.params.SessionConfiguration;
-import android.media.MediaPlayer;
 import android.os.Build;
 import android.os.Environment;
-import android.os.Handler;
-import android.view.Surface;
-import android.view.SurfaceHolder;
 import android.widget.Toast;
 
-import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
-import java.io.IOException;
-import java.util.Arrays;
-import java.util.List;
-import java.util.concurrent.Executor;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
+/**
+ * Xposed module entry. Coordinates shared state (video path, toast context) and
+ * delegates Camera API hooks to {@link Camera1Hook} and {@link Camera2Hook}.
+ */
 public class HookMain implements IXposedHookLoadPackage {
 
     private static final String SUBDIR_CAMERA1 = "DCIM/Camera1/";
-    private static final String VIDEO_FILE = "virtual.mp4";
+    static final String VIDEO_FILE = "virtual.mp4";
     private static final String FILE_DISABLE = "disable.jpg";
     private static final String FILE_NO_TOAST = "no_toast.jpg";
-    private static final String FILE_NO_SILENT = "no-silent.jpg";
 
-    public static Surface mSurface;
-    public static SurfaceTexture mSurfacetexture;
-    public static MediaPlayer mMediaPlayer;
-    public static SurfaceTexture fake_SurfaceTexture;
-    public static Camera origin_preview_camera;
+    // ---------- Shared state (used by Camera1Hook & Camera2Hook) ----------
+    public static String video_path = "/storage/emulated/0/" + SUBDIR_CAMERA1;
+    public static Context toast_content;
+    public static boolean need_to_show_toast = true;
 
-    public static Camera camera_onPreviewFrame;
-    public static Camera start_preview_camera;
+    // ---------- Camera1 (legacy) state ----------
+    public static android.view.Surface mSurface;
+    public static android.graphics.SurfaceTexture mSurfacetexture;
+    public static android.media.MediaPlayer mMediaPlayer;
+    public static android.graphics.SurfaceTexture fake_SurfaceTexture;
+    public static android.hardware.Camera origin_preview_camera;
+    public static android.hardware.Camera camera_onPreviewFrame;
+    public static android.hardware.Camera start_preview_camera;
     public static volatile byte[] data_buffer = {0};
     public static byte[] input;
     public static int mhight;
@@ -60,57 +47,52 @@ public class HookMain implements IXposedHookLoadPackage {
     public static boolean is_someone_playing;
     public static boolean is_hooked;
     public static VideoToFrames hw_decode_obj;
-    public static VideoToFrames c2_hw_decode_obj;
-    public static VideoToFrames c2_hw_decode_obj_1;
-    public static SurfaceTexture c1_fake_texture;
-    public static Surface c1_fake_surface;
-    public static SurfaceHolder ori_holder;
-    public static MediaPlayer mplayer1;
-    public static Camera mcamera1;
-    public int imageReaderFormat = 0;
-    public static boolean is_first_hook_build = true;
-
+    public static android.graphics.SurfaceTexture c1_fake_texture;
+    public static android.view.Surface c1_fake_surface;
+    public static android.view.SurfaceHolder ori_holder;
+    public static android.media.MediaPlayer mplayer1;
+    public static android.hardware.Camera mcamera1;
     public static int onemhight;
     public static int onemwidth;
-    public static Class camera_callback_calss;
+    public static Class<?> camera_callback_calss;
 
-    public static String video_path = "/storage/emulated/0/" + SUBDIR_CAMERA1;
+    // ---------- Camera2 state ----------
+    public static android.view.Surface c2_preview_Surfcae;
+    public static android.view.Surface c2_preview_Surfcae_1;
+    public static android.view.Surface c2_reader_Surfcae;
+    public static android.view.Surface c2_reader_Surfcae_1;
+    public static android.media.MediaPlayer c2_player;
+    public static android.media.MediaPlayer c2_player_1;
+    public static android.view.Surface c2_virtual_surface;
+    public static android.graphics.SurfaceTexture c2_virtual_surfaceTexture;
+    public static boolean need_recreate;
+    public static android.hardware.camera2.CameraDevice.StateCallback c2_state_cb;
+    public static android.hardware.camera2.CaptureRequest.Builder c2_builder;
+    public static android.hardware.camera2.params.SessionConfiguration fake_sessionConfiguration;
+    public static android.hardware.camera2.params.SessionConfiguration sessionConfiguration;
+    public static android.hardware.camera2.params.OutputConfiguration outputConfiguration;
+    public static int imageReaderFormat = 0;
+    public static boolean is_first_hook_build = true;
+    public static int c2_ori_width = 1280;
+    public static int c2_ori_height = 720;
+    public static Class<?> c2_state_callback;
+    public static VideoToFrames c2_hw_decode_obj;
+    public static VideoToFrames c2_hw_decode_obj_1;
 
-    public static Surface c2_preview_Surfcae;
-    public static Surface c2_preview_Surfcae_1;
-    public static Surface c2_reader_Surfcae;
-    public static Surface c2_reader_Surfcae_1;
-    public static MediaPlayer c2_player;
-    public static MediaPlayer c2_player_1;
-    public static Surface c2_virtual_surface;
-    public static SurfaceTexture c2_virtual_surfaceTexture;
-    public boolean need_recreate;
-    public static CameraDevice.StateCallback c2_state_cb;
-    public static CaptureRequest.Builder c2_builder;
-    public static SessionConfiguration fake_sessionConfiguration;
-    public static SessionConfiguration sessionConfiguration;
-    public static OutputConfiguration outputConfiguration;
-    public boolean need_to_show_toast = true;
-
-    public int c2_ori_width = 1280;
-    public int c2_ori_height = 720;
-
-    public static Class c2_state_callback;
-    public Context toast_content;
-
-    private static String getDcimCamera1Path() {
+    // ---------- Helpers (package-private for Camera1Hook/Camera2Hook) ----------
+    static String getDcimCamera1Path() {
         return Environment.getExternalStorageDirectory().getPath() + "/" + SUBDIR_CAMERA1;
     }
 
-    private boolean isDisabled() {
+    boolean isDisabled() {
         return new File(getDcimCamera1Path() + FILE_DISABLE).exists();
     }
 
-    private void updateShouldShowToast() {
+    void updateShouldShowToast() {
         need_to_show_toast = !new File(getDcimCamera1Path() + FILE_NO_TOAST).exists();
     }
 
-    private void showNoVideoToast(String packageName) {
+    void showNoVideoToast(String packageName) {
         if (toast_content == null || !need_to_show_toast) return;
         try {
             Toast.makeText(toast_content, "不存在替换视频\n" + packageName + " 当前路径：" + video_path, Toast.LENGTH_SHORT).show();
@@ -119,991 +101,84 @@ public class HookMain implements IXposedHookLoadPackage {
         }
     }
 
-    private boolean hasVirtualVideo() {
+    boolean hasVirtualVideo() {
         return new File(video_path + VIDEO_FILE).exists();
     }
 
+    @Override
     public void handleLoadPackage(final XC_LoadPackage.LoadPackageParam lpparam) throws Exception {
-        XposedHelpers.findAndHookMethod("android.hardware.Camera", lpparam.classLoader, "setPreviewTexture", SurfaceTexture.class, new XC_MethodHook() {
-            @Override
-            protected void beforeHookedMethod(MethodHookParam param) {
-                if (hasVirtualVideo()) {
-                    if (isDisabled()) {
-                        return;
-                    }
-                    if (is_hooked) {
-                        is_hooked = false;
-                        return;
-                    }
-                    if (param.args[0] == null) {
-                        return;
-                    }
-                    if (param.args[0].equals(c1_fake_texture)) {
-                        return;
-                    }
-                    if (origin_preview_camera != null && origin_preview_camera.equals(param.thisObject)) {
-                        param.args[0] = fake_SurfaceTexture;
-                        Logger.i("duplicate preview camera: " + origin_preview_camera.toString());
-                        return;
-                    } else {
-                        Logger.i("create preview");
-                    }
+        hookApplicationOnCreate(lpparam);
+        new Camera1Hook().hook(this, lpparam);
+        new Camera2Hook().hook(this, lpparam);
+    }
 
-                    origin_preview_camera = (Camera) param.thisObject;
-                    mSurfacetexture = (SurfaceTexture) param.args[0];
-                    if (fake_SurfaceTexture == null) {
-                        fake_SurfaceTexture = new SurfaceTexture(10);
-                    } else {
-                        fake_SurfaceTexture.release();
-                        fake_SurfaceTexture = new SurfaceTexture(10);
-                    }
-                    param.args[0] = fake_SurfaceTexture;
-                } else {
-                    updateShouldShowToast();
-                    showNoVideoToast(lpparam.packageName);
-                }
-            }
-        });
-
-        XposedHelpers.findAndHookMethod("android.hardware.camera2.CameraManager", lpparam.classLoader, "openCamera", String.class, CameraDevice.StateCallback.class, Handler.class, new XC_MethodHook() {
-            @Override
-            protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                if (param.args[1] == null) {
-                    return;
-                }
-                if (param.args[1].equals(c2_state_cb)) {
-                    return;
-                }
-                c2_state_cb = (CameraDevice.StateCallback) param.args[1];
-                c2_state_callback = param.args[1].getClass();
-                if (isDisabled()) return;
-                updateShouldShowToast();
-                if (!hasVirtualVideo()) {
-                    showNoVideoToast(lpparam.packageName);
-                    return;
-                }
-                Logger.i("camera2 init (1-arg), callback class: " + c2_state_callback.toString());
-                is_first_hook_build = true;
-                process_camera2_init(c2_state_callback);
-            }
-        });
-
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            XposedHelpers.findAndHookMethod("android.hardware.camera2.CameraManager", lpparam.classLoader, "openCamera", String.class, Executor.class, CameraDevice.StateCallback.class, new XC_MethodHook() {
-                @Override
-                protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                    if (param.args[2] == null) {
-                        return;
-                    }
-                    if (param.args[2].equals(c2_state_cb)) {
-                        return;
-                    }
-                    c2_state_cb = (CameraDevice.StateCallback) param.args[2];
-                    if (isDisabled()) return;
-                    updateShouldShowToast();
-                    if (!hasVirtualVideo()) {
-                        showNoVideoToast(lpparam.packageName);
-                        return;
-                    }
-                    c2_state_callback = param.args[2].getClass();
-                    Logger.i("camera2 init (2-arg), callback class: " + c2_state_callback.toString());
-                    is_first_hook_build = true;
-                    process_camera2_init(c2_state_callback);
-                }
-            });
-        }
-
-
-        XposedHelpers.findAndHookMethod("android.hardware.Camera", lpparam.classLoader, "setPreviewCallbackWithBuffer", Camera.PreviewCallback.class, new XC_MethodHook() {
-            @Override
-            protected void beforeHookedMethod(MethodHookParam param) {
-                if (param.args[0] != null) {
-                    process_callback(param);
-                }
-            }
-        });
-
-        XposedHelpers.findAndHookMethod("android.hardware.Camera", lpparam.classLoader, "addCallbackBuffer", byte[].class, new XC_MethodHook() {
-            @Override
-            protected void beforeHookedMethod(MethodHookParam param) {
-                if (param.args[0] != null) {
-                    param.args[0] = new byte[((byte[]) param.args[0]).length];
-                }
-            }
-        });
-
-        XposedHelpers.findAndHookMethod("android.hardware.Camera", lpparam.classLoader, "setPreviewCallback", Camera.PreviewCallback.class, new XC_MethodHook() {
-            @Override
-            protected void beforeHookedMethod(MethodHookParam param) {
-                if (param.args[0] != null) {
-                    process_callback(param);
-                }
-            }
-        });
-
-        XposedHelpers.findAndHookMethod("android.hardware.Camera", lpparam.classLoader, "setOneShotPreviewCallback", Camera.PreviewCallback.class, new XC_MethodHook() {
-            @Override
-            protected void beforeHookedMethod(MethodHookParam param) {
-                if (param.args[0] != null) {
-                    process_callback(param);
-                }
-            }
-        });
-
-        XposedHelpers.findAndHookMethod("android.hardware.Camera", lpparam.classLoader, "takePicture", Camera.ShutterCallback.class, Camera.PictureCallback.class, Camera.PictureCallback.class, Camera.PictureCallback.class, new XC_MethodHook() {
-            @Override
-            protected void afterHookedMethod(MethodHookParam param) {
-                Logger.i("takePicture (4-arg)");
-                if (param.args[1] != null) {
-                    process_a_shot_YUV(param);
-                }
-
-                if (param.args[3] != null) {
-                    process_a_shot_jpeg(param, 3);
-                }
-            }
-        });
-
-        XposedHelpers.findAndHookMethod("android.media.MediaRecorder", lpparam.classLoader, "setCamera", Camera.class, new XC_MethodHook() {
-            @Override
-            protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                super.beforeHookedMethod(param);
-                updateShouldShowToast();
-                Logger.i("record triggered: " + lpparam.packageName);
-                if (toast_content != null && need_to_show_toast) {
-                    try {
-                        Toast.makeText(toast_content, "应用：" + lpparam.appInfo.name + "(" + lpparam.packageName + ") 触发了录像，但目前无法拦截", Toast.LENGTH_SHORT).show();
-                    } catch (Exception e) {
-                        Logger.i("toast: " + Arrays.toString(e.getStackTrace()));
-                    }
-                }
-            }
-        });
-
-        XposedHelpers.findAndHookMethod("android.app.Instrumentation", lpparam.classLoader, "callApplicationOnCreate", Application.class, new XC_MethodHook() {
-            @Override
-            protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                super.afterHookedMethod(param);
-                if (param.args[0] instanceof Application) {
-                    try {
-                        toast_content = ((Application) param.args[0]).getApplicationContext();
-                    } catch (Exception ee) {
-                        Logger.i(String.valueOf(ee));
-                    }
-                    File force_private = new File(getDcimCamera1Path() + "private_dir.jpg");
-                    if (toast_content != null) {//后半段用于强制私有目录
-                        int auth_statue = 0;
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                            try {
-                                auth_statue += (toast_content.checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) + 1);
-                            } catch (Exception ee) {
-                                Logger.i("permission-check: " + ee.toString());
-                            }
-                            try {
-                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                                    auth_statue += (toast_content.checkSelfPermission(Manifest.permission.MANAGE_EXTERNAL_STORAGE) + 1);
-                                }
-                            } catch (Exception ee) {
-                                Logger.i("permission-check: " + ee.toString());
-                            }
-                        }else {
-                            if (toast_content.checkCallingPermission(Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED ){
-                                auth_statue = 2;
-                            }
+    /**
+     * Hook Application.onCreate to set video_path and toast_content per process.
+     */
+    private void hookApplicationOnCreate(final XC_LoadPackage.LoadPackageParam lpparam) {
+        XposedHelpers.findAndHookMethod("android.app.Instrumentation", lpparam.classLoader,
+                "callApplicationOnCreate", Application.class, new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                        super.afterHookedMethod(param);
+                        if (!(param.args[0] instanceof Application)) return;
+                        try {
+                            toast_content = ((Application) param.args[0]).getApplicationContext();
+                        } catch (Exception e) {
+                            Logger.i(String.valueOf(e));
                         }
-                        //权限判断完毕
-                        if (auth_statue < 1 || force_private.exists()) {
-                            File shown_file = new File(toast_content.getExternalFilesDir(null).getAbsolutePath() + "/Camera1/");
-                            if ((!shown_file.isDirectory()) && shown_file.exists()) {
-                                shown_file.delete();
-                            }
-                            if (!shown_file.exists()) {
-                                shown_file.mkdir();
-                            }
-                            shown_file = new File(toast_content.getExternalFilesDir(null).getAbsolutePath() + "/Camera1/has_shown");
-                            File toast_force_file = new File(getDcimCamera1Path() + "force_show.jpg");
-                            if ((!lpparam.packageName.equals(BuildConfig.APPLICATION_ID)) && ((!shown_file.exists()) || toast_force_file.exists())) {
+                        File forcePrivate = new File(getDcimCamera1Path() + "private_dir.jpg");
+                        if (toast_content != null) {
+                            int authStatus = 0;
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                                 try {
-                                    Toast.makeText(toast_content, lpparam.packageName+"未授予读取本地目录权限，请检查权限\nCamera1目前重定向为 " + toast_content.getExternalFilesDir(null).getAbsolutePath() + "/Camera1/", Toast.LENGTH_SHORT).show();
-                                    FileOutputStream fos = new FileOutputStream(toast_content.getExternalFilesDir(null).getAbsolutePath() + "/Camera1/" + "has_shown");
-                                    String info = "shown";
-                                    fos.write(info.getBytes());
-                                    fos.flush();
-                                    fos.close();
+                                    authStatus += (toast_content.checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) + 1);
                                 } catch (Exception e) {
-                                    Logger.i("switch-dir: " + e.toString());
+                                    Logger.i("permission-check: " + e);
+                                }
+                                try {
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                                        authStatus += (toast_content.checkSelfPermission(Manifest.permission.MANAGE_EXTERNAL_STORAGE) + 1);
+                                    }
+                                } catch (Exception e) {
+                                    Logger.i("permission-check: " + e);
+                                }
+                            } else {
+                                if (toast_content.checkCallingPermission(Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED) {
+                                    authStatus = 2;
                                 }
                             }
-                            video_path = toast_content.getExternalFilesDir(null).getAbsolutePath() + "/Camera1/";
+                            if (authStatus < 1 || forcePrivate.exists()) {
+                                File shownDir = new File(toast_content.getExternalFilesDir(null).getAbsolutePath() + "/Camera1/");
+                                if (shownDir.exists() && !shownDir.isDirectory()) shownDir.delete();
+                                if (!shownDir.exists()) shownDir.mkdir();
+                                File hasShown = new File(toast_content.getExternalFilesDir(null).getAbsolutePath() + "/Camera1/has_shown");
+                                File forceShow = new File(getDcimCamera1Path() + "force_show.jpg");
+                                if (!lpparam.packageName.equals(BuildConfig.APPLICATION_ID) && (!hasShown.exists() || forceShow.exists())) {
+                                    try {
+                                        Toast.makeText(toast_content,
+                                                lpparam.packageName + "未授予读取本地目录权限，请检查权限\nCamera1目前重定向为 " + toast_content.getExternalFilesDir(null).getAbsolutePath() + "/Camera1/",
+                                                Toast.LENGTH_SHORT).show();
+                                        try (FileOutputStream fos = new FileOutputStream(toast_content.getExternalFilesDir(null).getAbsolutePath() + "/Camera1/has_shown")) {
+                                            fos.write("shown".getBytes());
+                                        }
+                                    } catch (Exception e) {
+                                        Logger.i("switch-dir: " + e);
+                                    }
+                                }
+                                video_path = toast_content.getExternalFilesDir(null).getAbsolutePath() + "/Camera1/";
+                            } else {
+                                video_path = getDcimCamera1Path();
+                            }
                         } else {
                             video_path = getDcimCamera1Path();
-                        }
-                    } else {
-                        video_path = getDcimCamera1Path();
-                        File uni_DCIM_path = new File(getDcimCamera1Path());
-                        if (uni_DCIM_path.canWrite()) {
-                            File uni_Camera1_path = new File(video_path);
-                            if (!uni_Camera1_path.exists()) {
-                                uni_Camera1_path.mkdir();
-                            }
-                        }
-                    }
-                }
-            }
-        });
-
-        XposedHelpers.findAndHookMethod("android.hardware.Camera", lpparam.classLoader, "startPreview", new XC_MethodHook() {
-            @Override
-            protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                updateShouldShowToast();
-                if (!hasVirtualVideo()) {
-                    showNoVideoToast(lpparam.packageName);
-                    return;
-                }
-                if (isDisabled()) return;
-                is_someone_playing = false;
-                Logger.i("start preview");
-                start_preview_camera = (Camera) param.thisObject;
-                if (ori_holder != null) {
-                    if (mplayer1 == null) {
-                        mplayer1 = new MediaPlayer();
-                    } else {
-                        mplayer1.release();
-                        mplayer1 = null;
-                        mplayer1 = new MediaPlayer();
-                    }
-                    if (!ori_holder.getSurface().isValid()) {
-                        return;
-                    }
-                    mplayer1.setSurface(ori_holder.getSurface());
-                    boolean noSilentFile = new File(getDcimCamera1Path() + FILE_NO_SILENT).exists();
-                    if (!noSilentFile || is_someone_playing) {
-                        mplayer1.setVolume(0, 0);
-                        is_someone_playing = false;
-                    } else {
-                        is_someone_playing = true;
-                    }
-                    mplayer1.setLooping(true);
-                    mplayer1.setOnPreparedListener(mp -> mplayer1.start());
-                    try {
-                        mplayer1.setDataSource(video_path + VIDEO_FILE);
-                        mplayer1.prepare();
-                    } catch (IOException e) {
-                        Logger.i(String.valueOf(e));
-                    }
-                }
-
-
-                if (mSurfacetexture != null) {
-                    if (mSurface == null) {
-                        mSurface = new Surface(mSurfacetexture);
-                    } else {
-                        mSurface.release();
-                        mSurface = new Surface(mSurfacetexture);
-                    }
-                    if (mMediaPlayer == null) {
-                        mMediaPlayer = new MediaPlayer();
-                    } else {
-                        mMediaPlayer.release();
-                        mMediaPlayer = new MediaPlayer();
-                    }
-                    mMediaPlayer.setSurface(mSurface);
-                    boolean noSilent = new File(getDcimCamera1Path() + FILE_NO_SILENT).exists();
-                    if (!noSilent || is_someone_playing) {
-                        mMediaPlayer.setVolume(0, 0);
-                        is_someone_playing = false;
-                    } else {
-                        is_someone_playing = true;
-                    }
-                    mMediaPlayer.setLooping(true);
-                    mMediaPlayer.setOnPreparedListener(mp -> mMediaPlayer.start());
-                    try {
-                        mMediaPlayer.setDataSource(video_path + VIDEO_FILE);
-                        mMediaPlayer.prepare();
-                    } catch (IOException e) {
-                        Logger.i(String.valueOf(e));
-                    }
-                }
-            }
-        });
-
-        XposedHelpers.findAndHookMethod("android.hardware.Camera", lpparam.classLoader, "setPreviewDisplay", SurfaceHolder.class, new XC_MethodHook() {
-            @Override
-            protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                Logger.i("add SurfaceView preview");
-                updateShouldShowToast();
-                if (!hasVirtualVideo()) {
-                    showNoVideoToast(lpparam.packageName);
-                    return;
-                }
-                if (isDisabled()) return;
-                mcamera1 = (Camera) param.thisObject;
-                ori_holder = (SurfaceHolder) param.args[0];
-                if (c1_fake_texture == null) {
-                    c1_fake_texture = new SurfaceTexture(11);
-                } else {
-                    c1_fake_texture.release();
-                    c1_fake_texture = null;
-                    c1_fake_texture = new SurfaceTexture(11);
-                }
-
-                if (c1_fake_surface == null) {
-                    c1_fake_surface = new Surface(c1_fake_texture);
-                } else {
-                    c1_fake_surface.release();
-                    c1_fake_surface = null;
-                    c1_fake_surface = new Surface(c1_fake_texture);
-                }
-                is_hooked = true;
-                mcamera1.setPreviewTexture(c1_fake_texture);
-                param.setResult(null);
-            }
-        });
-
-        XposedHelpers.findAndHookMethod("android.hardware.camera2.CaptureRequest.Builder", lpparam.classLoader, "addTarget", Surface.class, new XC_MethodHook() {
-            @Override
-            protected void beforeHookedMethod(MethodHookParam param) {
-
-                if (param.args[0] == null || param.thisObject == null) return;
-                updateShouldShowToast();
-                if (!hasVirtualVideo()) {
-                    showNoVideoToast(lpparam.packageName);
-                    return;
-                }
-                if (param.args[0].equals(c2_virtual_surface)) return;
-                if (isDisabled()) return;
-                String surfaceInfo = param.args[0].toString();
-                if (surfaceInfo.contains("Surface(name=null)")) {
-                    if (c2_reader_Surfcae == null) {
-                        c2_reader_Surfcae = (Surface) param.args[0];
-                    } else {
-                        if ((!c2_reader_Surfcae.equals(param.args[0])) && c2_reader_Surfcae_1 == null) {
-                            c2_reader_Surfcae_1 = (Surface) param.args[0];
-                        }
-                    }
-                } else {
-                    if (c2_preview_Surfcae == null) {
-                        c2_preview_Surfcae = (Surface) param.args[0];
-                    } else {
-                        if ((!c2_preview_Surfcae.equals(param.args[0])) && c2_preview_Surfcae_1 == null) {
-                            c2_preview_Surfcae_1 = (Surface) param.args[0];
-                        }
-                    }
-                }
-                Logger.i("addTarget: " + param.args[0].toString());
-                param.args[0] = c2_virtual_surface;
-
-            }
-        });
-
-        XposedHelpers.findAndHookMethod("android.hardware.camera2.CaptureRequest.Builder", lpparam.classLoader, "removeTarget", Surface.class, new XC_MethodHook() {
-            @Override
-            protected void beforeHookedMethod(MethodHookParam param) {
-
-                if (param.args[0] == null || param.thisObject == null) return;
-                updateShouldShowToast();
-                if (!hasVirtualVideo()) {
-                    showNoVideoToast(lpparam.packageName);
-                    return;
-                }
-                if (isDisabled()) return;
-                Surface rm_surf = (Surface) param.args[0];
-                if (rm_surf.equals(c2_preview_Surfcae)) {
-                    c2_preview_Surfcae = null;
-                }
-                if (rm_surf.equals(c2_preview_Surfcae_1)) {
-                    c2_preview_Surfcae_1 = null;
-                }
-                if (rm_surf.equals(c2_reader_Surfcae_1)) {
-                    c2_reader_Surfcae_1 = null;
-                }
-                if (rm_surf.equals(c2_reader_Surfcae)) {
-                    c2_reader_Surfcae = null;
-                }
-
-                Logger.i("removeTarget: " + param.args[0].toString());
-            }
-        });
-
-        XposedHelpers.findAndHookMethod("android.hardware.camera2.CaptureRequest.Builder", lpparam.classLoader, "build", new XC_MethodHook() {
-            @Override
-            protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                if (param.thisObject == null) {
-                    return;
-                }
-                if (param.thisObject.equals(c2_builder)) {
-                    return;
-                }
-                c2_builder = (CaptureRequest.Builder) param.thisObject;
-                updateShouldShowToast();
-                if (!hasVirtualVideo()) {
-                    showNoVideoToast(lpparam.packageName);
-                    return;
-                }
-                if (isDisabled()) return;
-                Logger.i("CaptureRequest.Builder build");
-                process_camera2_play();
-            }
-        });
-
-/*        XposedHelpers.findAndHookMethod("android.hardware.Camera", lpparam.classLoader, "stopPreview", new XC_MethodHook() {
-            @Override
-            protected void beforeHookedMethod(MethodHookParam param) {
-                if (param.thisObject.equals(HookMain.origin_preview_camera) || param.thisObject.equals(HookMain.camera_onPreviewFrame) || param.thisObject.equals(HookMain.mcamera1)) {
-                    if (hw_decode_obj != null) {
-                        hw_decode_obj.stopDecode();
-                    }
-                    if (mplayer1 != null) {
-                        mplayer1.release();
-                        mplayer1 = null;
-                    }
-                    if (mMediaPlayer != null) {
-                        mMediaPlayer.release();
-                        mMediaPlayer = null;
-                    }
-                    is_someone_playing = false;
-
-                    Logger.i("stop preview");
-                }
-            }
-        });*/
-
-        XposedHelpers.findAndHookMethod("android.media.ImageReader", lpparam.classLoader, "newInstance", int.class, int.class, int.class, int.class, new XC_MethodHook() {
-            @Override
-            protected void beforeHookedMethod(MethodHookParam param) {
-                Logger.i("ImageReader newInstance: width=" + param.args[0] + " height=" + param.args[1] + " format=" + param.args[2]);
-                c2_ori_width = (int) param.args[0];
-                c2_ori_height = (int) param.args[1];
-                imageReaderFormat = (int) param.args[2];
-                updateShouldShowToast();
-                if (toast_content != null && need_to_show_toast) {
-                    try {
-                        Toast.makeText(toast_content, "应用创建了渲染器：\n宽：" + param.args[0] + "\n高：" + param.args[1] + "\n一般只需要宽高比与视频相同", Toast.LENGTH_SHORT).show();
-                    } catch (Exception e) {
-                        Logger.i("toast: " + e.toString());
-                    }
-                }
-            }
-        });
-
-
-        XposedHelpers.findAndHookMethod("android.hardware.camera2.CameraCaptureSession.CaptureCallback", lpparam.classLoader, "onCaptureFailed", CameraCaptureSession.class, CaptureRequest.class, CaptureFailure.class,
-                new XC_MethodHook() {
-                    @Override
-                    protected void beforeHookedMethod(MethodHookParam param) {
-                        Logger.i("onCaptureFailed, reason: " + ((CaptureFailure) param.args[2]).getReason());
-
-                    }
-                });
-    }
-
-    private void process_camera2_play() {
-
-        if (c2_reader_Surfcae != null) {
-            if (c2_hw_decode_obj != null) {
-                c2_hw_decode_obj.stopDecode();
-                c2_hw_decode_obj = null;
-            }
-
-            c2_hw_decode_obj = new VideoToFrames();
-            try {
-                if (imageReaderFormat == 256) {
-                    c2_hw_decode_obj.setSaveFrames("null", OutputImageFormat.JPEG);
-                } else {
-                    c2_hw_decode_obj.setSaveFrames("null", OutputImageFormat.NV21);
-                }
-                c2_hw_decode_obj.set_surfcae(c2_reader_Surfcae);
-                c2_hw_decode_obj.decode(video_path + VIDEO_FILE);
-            } catch (Throwable throwable) {
-                Logger.i(String.valueOf(throwable));
-            }
-        }
-
-        if (c2_reader_Surfcae_1 != null) {
-            if (c2_hw_decode_obj_1 != null) {
-                c2_hw_decode_obj_1.stopDecode();
-                c2_hw_decode_obj_1 = null;
-            }
-
-            c2_hw_decode_obj_1 = new VideoToFrames();
-            try {
-                if (imageReaderFormat == 256) {
-                    c2_hw_decode_obj_1.setSaveFrames("null", OutputImageFormat.JPEG);
-                } else {
-                    c2_hw_decode_obj_1.setSaveFrames("null", OutputImageFormat.NV21);
-                }
-                c2_hw_decode_obj_1.set_surfcae(c2_reader_Surfcae_1);
-                c2_hw_decode_obj_1.decode(video_path + VIDEO_FILE);
-            } catch (Throwable throwable) {
-                Logger.i(String.valueOf(throwable));
-            }
-        }
-
-
-        if (c2_preview_Surfcae != null) {
-            if (c2_player == null) {
-                c2_player = new MediaPlayer();
-            } else {
-                c2_player.release();
-                c2_player = new MediaPlayer();
-            }
-            c2_player.setSurface(c2_preview_Surfcae);
-            if (!new File(getDcimCamera1Path() + FILE_NO_SILENT).exists()) {
-                c2_player.setVolume(0, 0);
-            }
-            c2_player.setLooping(true);
-
-            try {
-                c2_player.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
-                    public void onPrepared(MediaPlayer mp) {
-                        c2_player.start();
-                    }
-                });
-                c2_player.setDataSource(video_path + VIDEO_FILE);
-                c2_player.prepare();
-            } catch (Exception e) {
-                Logger.i("c2player: " + c2_preview_Surfcae.toString() + " " + e);
-            }
-        }
-
-        if (c2_preview_Surfcae_1 != null) {
-            if (c2_player_1 == null) {
-                c2_player_1 = new MediaPlayer();
-            } else {
-                c2_player_1.release();
-                c2_player_1 = new MediaPlayer();
-            }
-            c2_player_1.setSurface(c2_preview_Surfcae_1);
-            if (!new File(getDcimCamera1Path() + FILE_NO_SILENT).exists()) {
-                c2_player_1.setVolume(0, 0);
-            }
-            c2_player_1.setLooping(true);
-
-            try {
-                c2_player_1.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
-                    public void onPrepared(MediaPlayer mp) {
-                        c2_player_1.start();
-                    }
-                });
-                c2_player_1.setDataSource(video_path + VIDEO_FILE);
-                c2_player_1.prepare();
-            } catch (Exception e) {
-                Logger.i("c2player1: " + c2_preview_Surfcae_1.toString() + " " + e);
-            }
-        }
-        Logger.i("camera2 play done");
-    }
-
-    private Surface create_virtual_surface() {
-        if (need_recreate) {
-            if (c2_virtual_surfaceTexture != null) {
-                c2_virtual_surfaceTexture.release();
-                c2_virtual_surfaceTexture = null;
-            }
-            if (c2_virtual_surface != null) {
-                c2_virtual_surface.release();
-                c2_virtual_surface = null;
-            }
-            c2_virtual_surfaceTexture = new SurfaceTexture(15);
-            c2_virtual_surface = new Surface(c2_virtual_surfaceTexture);
-            need_recreate = false;
-        } else {
-            if (c2_virtual_surface == null) {
-                need_recreate = true;
-                c2_virtual_surface = create_virtual_surface();
-            }
-        }
-        Logger.i("create_virtual_surface: " + c2_virtual_surface.toString());
-        return c2_virtual_surface;
-    }
-
-    private void process_camera2_init(Class hooked_class) {
-
-        XposedHelpers.findAndHookMethod(hooked_class, "onOpened", CameraDevice.class, new XC_MethodHook() {
-            @Override
-            protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                need_recreate = true;
-                create_virtual_surface();
-                if (c2_player != null) {
-                    c2_player.stop();
-                    c2_player.reset();
-                    c2_player.release();
-                    c2_player = null;
-                }
-                if (c2_hw_decode_obj_1 != null) {
-                    c2_hw_decode_obj_1.stopDecode();
-                    c2_hw_decode_obj_1 = null;
-                }
-                if (c2_hw_decode_obj != null) {
-                    c2_hw_decode_obj.stopDecode();
-                    c2_hw_decode_obj = null;
-                }
-                if (c2_player_1 != null) {
-                    c2_player_1.stop();
-                    c2_player_1.reset();
-                    c2_player_1.release();
-                    c2_player_1 = null;
-                }
-                c2_preview_Surfcae_1 = null;
-                c2_reader_Surfcae_1 = null;
-                c2_reader_Surfcae = null;
-                c2_preview_Surfcae = null;
-                is_first_hook_build = true;
-                Logger.i("camera2 opened");
-
-                updateShouldShowToast();
-                if (!hasVirtualVideo()) {
-                    showNoVideoToast(toast_content != null ? toast_content.getPackageName() : "");
-                    return;
-                }
-                XposedHelpers.findAndHookMethod(param.args[0].getClass(), "createCaptureSession", List.class, CameraCaptureSession.StateCallback.class, Handler.class, new XC_MethodHook() {
-                    @Override
-                    protected void beforeHookedMethod(MethodHookParam paramd) throws Throwable {
-                        if (paramd.args[0] != null) {
-                            Logger.i("createCaptureSession: original=" + paramd.args[0].toString() + " virtual=" + c2_virtual_surface.toString());
-                            paramd.args[0] = Arrays.asList(c2_virtual_surface);
-                            if (paramd.args[1] != null) {
-                                process_camera2Session_callback((CameraCaptureSession.StateCallback) paramd.args[1]);
+                            File dcim = new File(getDcimCamera1Path());
+                            if (dcim.canWrite()) {
+                                File cam1 = new File(video_path);
+                                if (!cam1.exists()) cam1.mkdir();
                             }
                         }
                     }
                 });
-
-/*                XposedHelpers.findAndHookMethod(param.args[0].getClass(), "close", new XC_MethodHook() {
-                    @Override
-                    protected void beforeHookedMethod(MethodHookParam paramd) throws Throwable {
-                        Logger.i("camera2 stop preview");
-                        if (c2_hw_decode_obj != null) {
-                            c2_hw_decode_obj.stopDecode();
-                            c2_hw_decode_obj = null;
-                        }
-                        if (c2_hw_decode_obj_1 != null) {
-                            c2_hw_decode_obj_1.stopDecode();
-                            c2_hw_decode_obj_1 = null;
-                        }
-                        if (c2_player != null) {
-                            c2_player.release();
-                            c2_player = null;
-                        }
-                        if (c2_player_1 != null){
-                            c2_player_1.release();
-                            c2_player_1 = null;
-                        }
-                        c2_preview_Surfcae_1 = null;
-                        c2_reader_Surfcae_1 = null;
-                        c2_reader_Surfcae = null;
-                        c2_preview_Surfcae = null;
-                        need_recreate = true;
-                        is_first_hook_build= true;
-                    }
-                });*/
-
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                    XposedHelpers.findAndHookMethod(param.args[0].getClass(), "createCaptureSessionByOutputConfigurations", List.class, CameraCaptureSession.StateCallback.class, Handler.class, new XC_MethodHook() {
-                        @Override
-                        protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                            super.beforeHookedMethod(param);
-                            if (param.args[0] != null) {
-                                outputConfiguration = new OutputConfiguration(c2_virtual_surface);
-                                param.args[0] = Arrays.asList(outputConfiguration);
-
-                                Logger.i("createCaptureSessionByOutputConfigurations");
-                                if (param.args[1] != null) {
-                                    process_camera2Session_callback((CameraCaptureSession.StateCallback) param.args[1]);
-                                }
-                            }
-                        }
-                    });
-                }
-
-
-                    XposedHelpers.findAndHookMethod(param.args[0].getClass(), "createConstrainedHighSpeedCaptureSession", List.class, CameraCaptureSession.StateCallback.class, Handler.class, new XC_MethodHook() {
-                        @Override
-                        protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                            super.beforeHookedMethod(param);
-                            if (param.args[0] != null) {
-                                param.args[0] = Arrays.asList(c2_virtual_surface);
-                                Logger.i("createConstrainedHighSpeedCaptureSession");
-                                if (param.args[1] != null) {
-                                    process_camera2Session_callback((CameraCaptureSession.StateCallback) param.args[1]);
-                                }
-                            }
-                        }
-                    });
-
-
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    XposedHelpers.findAndHookMethod(param.args[0].getClass(), "createReprocessableCaptureSession", InputConfiguration.class, List.class, CameraCaptureSession.StateCallback.class, Handler.class, new XC_MethodHook() {
-                        @Override
-                        protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                            super.beforeHookedMethod(param);
-                            if (param.args[1] != null) {
-                                param.args[1] = Arrays.asList(c2_virtual_surface);
-                                Logger.i("createReprocessableCaptureSession");
-                                if (param.args[2] != null) {
-                                    process_camera2Session_callback((CameraCaptureSession.StateCallback) param.args[2]);
-                                }
-                            }
-                        }
-                    });
-                }
-
-
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                    XposedHelpers.findAndHookMethod(param.args[0].getClass(), "createReprocessableCaptureSessionByConfigurations", InputConfiguration.class, List.class, CameraCaptureSession.StateCallback.class, Handler.class, new XC_MethodHook() {
-                        @Override
-                        protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                            super.beforeHookedMethod(param);
-                            if (param.args[1] != null) {
-                                outputConfiguration = new OutputConfiguration(c2_virtual_surface);
-                                param.args[0] = Arrays.asList(outputConfiguration);
-                                Logger.i("createReprocessableCaptureSessionByConfigurations");
-                                if (param.args[2] != null) {
-                                    process_camera2Session_callback((CameraCaptureSession.StateCallback) param.args[2]);
-                                }
-                            }
-                        }
-                    });
-                }
-
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                    XposedHelpers.findAndHookMethod(param.args[0].getClass(), "createCaptureSession", SessionConfiguration.class, new XC_MethodHook() {
-                        @Override
-                        protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                            super.beforeHookedMethod(param);
-                            if (param.args[0] != null) {
-                                Logger.i("createCaptureSession (SessionConfiguration)");
-                                sessionConfiguration = (SessionConfiguration) param.args[0];
-                                outputConfiguration = new OutputConfiguration(c2_virtual_surface);
-                                fake_sessionConfiguration = new SessionConfiguration(sessionConfiguration.getSessionType(),
-                                        Arrays.asList(outputConfiguration),
-                                        sessionConfiguration.getExecutor(),
-                                        sessionConfiguration.getStateCallback());
-                                param.args[0] = fake_sessionConfiguration;
-                                process_camera2Session_callback(sessionConfiguration.getStateCallback());
-                            }
-                        }
-                    });
-                }
-            }
-        });
-
-
-        XposedHelpers.findAndHookMethod(hooked_class, "onError", CameraDevice.class, int.class, new XC_MethodHook() {
-            @Override
-            protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                Logger.i("camera onError: " + (int) param.args[1]);
-            }
-
-        });
-
-
-        XposedHelpers.findAndHookMethod(hooked_class, "onDisconnected", CameraDevice.class, new XC_MethodHook() {
-            @Override
-            protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                Logger.i("camera onDisconnected");
-            }
-
-        });
-
-
-    }
-
-    private void process_a_shot_jpeg(XC_MethodHook.MethodHookParam param, int index) {
-        try {
-            Logger.i("JPEG callback: " + param.args[index].toString());
-        } catch (Exception eee) {
-            Logger.i(String.valueOf(eee));
-
-        }
-        Class callback = param.args[index].getClass();
-
-        XposedHelpers.findAndHookMethod(callback, "onPictureTaken", byte[].class, android.hardware.Camera.class, new XC_MethodHook() {
-            @Override
-            protected void beforeHookedMethod(MethodHookParam paramd) throws Throwable {
-                try {
-                    Camera loaclcam = (Camera) paramd.args[1];
-                    onemwidth = loaclcam.getParameters().getPreviewSize().width;
-                    onemhight = loaclcam.getParameters().getPreviewSize().height;
-                    Logger.i("JPEG picture callback init: width=" + onemwidth + " height=" + onemhight + " camera=" + loaclcam);
-                    updateShouldShowToast();
-                    if (toast_content != null && need_to_show_toast) {
-                        try {
-                            Toast.makeText(toast_content, "发现拍照\n宽：" + onemwidth + "\n高：" + onemhight + "\n格式：JPEG", Toast.LENGTH_SHORT).show();
-                        } catch (Exception e) {
-                            Logger.i("toast: " + e);
-                        }
-                    }
-                    if (isDisabled()) return;
-
-                    Bitmap pict = getBMP(video_path + "1000.bmp");
-                    ByteArrayOutputStream temp_array = new ByteArrayOutputStream();
-                    pict.compress(Bitmap.CompressFormat.JPEG, 100, temp_array);
-                    byte[] jpeg_data = temp_array.toByteArray();
-                    paramd.args[0] = jpeg_data;
-                } catch (Exception ee) {
-                    Logger.i(String.valueOf(ee));
-                }
-            }
-        });
-    }
-
-    private void process_a_shot_YUV(XC_MethodHook.MethodHookParam param) {
-        try {
-            Logger.i("YUV picture callback: " + param.args[1].toString());
-        } catch (Exception eee) {
-            Logger.i(String.valueOf(eee));
-        }
-        Class callback = param.args[1].getClass();
-        XposedHelpers.findAndHookMethod(callback, "onPictureTaken", byte[].class, android.hardware.Camera.class, new XC_MethodHook() {
-            @Override
-            protected void beforeHookedMethod(MethodHookParam paramd) throws Throwable {
-                try {
-                    Camera loaclcam = (Camera) paramd.args[1];
-                    onemwidth = loaclcam.getParameters().getPreviewSize().width;
-                    onemhight = loaclcam.getParameters().getPreviewSize().height;
-                    Logger.i("YUV picture callback init: width=" + onemwidth + " height=" + onemhight + " camera=" + loaclcam);
-                    updateShouldShowToast();
-                    if (toast_content != null && need_to_show_toast) {
-                        try {
-                            Toast.makeText(toast_content, "发现拍照\n宽：" + onemwidth + "\n高：" + onemhight + "\n格式：YUV_420_888", Toast.LENGTH_SHORT).show();
-                        } catch (Exception e) {
-                            Logger.i("toast: " + e);
-                        }
-                    }
-                    if (isDisabled()) return;
-                    input = getYUVByBitmap(getBMP(video_path + "1000.bmp"));
-                    paramd.args[0] = input;
-                } catch (Exception ee) {
-                    Logger.i(String.valueOf(ee));
-                }
-            }
-        });
-    }
-
-    private void process_callback(XC_MethodHook.MethodHookParam param) {
-        Class preview_cb_class = param.args[0].getClass();
-        int need_stop = (isDisabled() || !hasVirtualVideo()) ? 1 : 0;
-        if (need_stop == 0) {
-            updateShouldShowToast();
-            if (!hasVirtualVideo()) {
-                showNoVideoToast(toast_content != null ? toast_content.getPackageName() : "");
-                need_stop = 1;
-            }
-        }
-        final int finalNeed_stop = need_stop;
-        XposedHelpers.findAndHookMethod(preview_cb_class, "onPreviewFrame", byte[].class, android.hardware.Camera.class, new XC_MethodHook() {
-            @Override
-            protected void beforeHookedMethod(MethodHookParam paramd) throws Throwable {
-                Camera localcam = (android.hardware.Camera) paramd.args[1];
-                if (localcam.equals(camera_onPreviewFrame)) {
-                    while (data_buffer == null) {
-                    }
-                    System.arraycopy(data_buffer, 0, paramd.args[0], 0, Math.min(data_buffer.length, ((byte[]) paramd.args[0]).length));
-                } else {
-                    camera_callback_calss = preview_cb_class;
-                    camera_onPreviewFrame = (android.hardware.Camera) paramd.args[1];
-                    mwidth = camera_onPreviewFrame.getParameters().getPreviewSize().width;
-                    mhight = camera_onPreviewFrame.getParameters().getPreviewSize().height;
-                    int frame_Rate = camera_onPreviewFrame.getParameters().getPreviewFrameRate();
-                    Logger.i("preview callback init: width=" + mwidth + " height=" + mhight + " frameRate=" + frame_Rate);
-                    updateShouldShowToast();
-                    if (toast_content != null && need_to_show_toast) {
-                        try {
-                            Toast.makeText(toast_content, "发现预览\n宽：" + mwidth + "\n高：" + mhight + "\n" + "需要视频分辨率与其完全相同", Toast.LENGTH_SHORT).show();
-                        } catch (Exception ee) {
-                            Logger.i("toast: " + ee.toString());
-                        }
-                    }
-                    if (finalNeed_stop == 1) {
-                        return;
-                    }
-                    if (hw_decode_obj != null) {
-                        hw_decode_obj.stopDecode();
-                    }
-                    hw_decode_obj = new VideoToFrames();
-                    hw_decode_obj.setSaveFrames("", OutputImageFormat.NV21);
-                    hw_decode_obj.decode(video_path + VIDEO_FILE);
-                    while (data_buffer == null) {
-                    }
-                    System.arraycopy(data_buffer, 0, paramd.args[0], 0, Math.min(data_buffer.length, ((byte[]) paramd.args[0]).length));
-                }
-
-            }
-        });
-
-    }
-
-    private void process_camera2Session_callback(CameraCaptureSession.StateCallback callback_calss){
-        if (callback_calss == null){
-            return;
-        }
-        XposedHelpers.findAndHookMethod(callback_calss.getClass(), "onConfigureFailed", CameraCaptureSession.class, new XC_MethodHook() {
-            @Override
-            protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                Logger.i("onConfigureFailed: " + param.args[0].toString());
-            }
-
-        });
-
-        XposedHelpers.findAndHookMethod(callback_calss.getClass(), "onConfigured", CameraCaptureSession.class, new XC_MethodHook() {
-            @Override
-            protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                Logger.i("onConfigured: " + param.args[0].toString());
-            }
-        });
-
-                XposedHelpers.findAndHookMethod(callback_calss.getClass(), "onClosed", CameraCaptureSession.class, new XC_MethodHook() {
-            @Override
-            protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                Logger.i("onClosed: " + param.args[0]);
-            }
-        });
-    }
-
-    // 以下代码来源：https://blog.csdn.net/jacke121/article/details/73888732
-    private Bitmap getBMP(String file) throws Throwable {
-        return BitmapFactory.decodeFile(file);
-    }
-
-    private static byte[] rgb2YCbCr420(int[] pixels, int width, int height) {
-        int len = width * height;
-        // yuv格式数组大小，y亮度占len长度，u,v各占len/4长度。
-        byte[] yuv = new byte[len * 3 / 2];
-        int y, u, v;
-        for (int i = 0; i < height; i++) {
-            for (int j = 0; j < width; j++) {
-                int rgb = (pixels[i * width + j]) & 0x00FFFFFF;
-                int r = rgb & 0xFF;
-                int g = (rgb >> 8) & 0xFF;
-                int b = (rgb >> 16) & 0xFF;
-                // 套用公式
-                y = ((66 * r + 129 * g + 25 * b + 128) >> 8) + 16;
-                u = ((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128;
-                v = ((112 * r - 94 * g - 18 * b + 128) >> 8) + 128;
-                y = y < 16 ? 16 : (Math.min(y, 255));
-                u = u < 0 ? 0 : (Math.min(u, 255));
-                v = v < 0 ? 0 : (Math.min(v, 255));
-                // 赋值
-                yuv[i * width + j] = (byte) y;
-                yuv[len + (i >> 1) * width + (j & ~1)] = (byte) u;
-                yuv[len + (i >> 1) * width + (j & ~1) + 1] = (byte) v;
-            }
-        }
-        return yuv;
-    }
-
-    private static byte[] getYUVByBitmap(Bitmap bitmap) {
-        if (bitmap == null) {
-            return null;
-        }
-        int width = bitmap.getWidth();
-        int height = bitmap.getHeight();
-        int size = width * height;
-        int[] pixels = new int[size];
-        bitmap.getPixels(pixels, 0, width, 0, 0, width, height);
-        return rgb2YCbCr420(pixels, width, height);
     }
 }
-
